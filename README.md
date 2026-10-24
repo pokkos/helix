@@ -4,3 +4,7 @@ So far I merged these PRs:
 
 1. [Icon support](https://github.com/helix-editor/helix/pull/12369)
 2. [Breadcrumbs](https://github.com/helix-editor/helix/pull/15573)
+
+Also these changes were done additionally:
+
+1. Add icons also to the symbols inside the breadcrumbs

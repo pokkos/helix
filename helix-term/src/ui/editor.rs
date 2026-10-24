@@ -905,6 +905,12 @@ impl EditorView {
                     _ => style,
                 };
 
+                let kind = symbol.kind.as_str();
+                if let Some(icon) = ICONS.load().kind().get(kind) {
+                    let icon = icon.with_padding(0, 1);
+                    x = draw_element(surface, viewport, x, &icon.glyph(), style);
+                }
+
                 x = draw_element(surface, viewport, x, symbol.name.as_ref(), style);
             }
         }
