@@ -472,8 +472,10 @@ See the documentation page on [pickers](./pickers.md) for more info.
 | -----                        | -------------                                              |
 | `Shift-Tab`, `Up`, `Ctrl-p`  | Previous entry                                             |
 | `Tab`, `Down`, `Ctrl-n`      | Next entry                                                 |
-| `PageUp`, `Ctrl-u`           | Page up                                                    |
-| `PageDown`, `Ctrl-d`         | Page down                                                  |
+| `PageUp`                     | Page up                                                    |
+| `PageDown`                   | Page down                                                  |
+| `Ctrl-u`                     | Scroll the preview up a page                               |
+| `Ctrl-d`                     | Scroll the preview down a page                             |
 | `Home`                       | Go to first entry                                          |
 | `End`                        | Go to last entry                                           |
 | `Enter`                      | Open selected                                              |
