@@ -346,6 +346,13 @@ pub struct Config {
         deserialize_with = "deserialize_duration_millis"
     )]
     pub idle_timeout: Duration,
+    /// Time in milliseconds after which a status message is hidden.
+    /// `0` keeps it until the next keypress (the old behavior). Defaults to 5000ms.
+    #[serde(
+        serialize_with = "serialize_duration_millis",
+        deserialize_with = "deserialize_duration_millis"
+    )]
+    pub status_timeout: Duration,
     /// Time in milliseconds after typing a word character before auto completions
     /// are shown, set to 5 for instant. Defaults to 250ms.
     #[serde(
@@ -1190,6 +1197,7 @@ impl Default for Config {
             default_yank_register: '"',
             auto_save: AutoSave::default(),
             idle_timeout: Duration::from_millis(250),
+            status_timeout: Duration::from_millis(5000),
             completion_timeout: Duration::from_millis(250),
             preview_completion_insert: true,
             completion_trigger_len: 2,
@@ -1305,6 +1313,8 @@ pub struct Editor {
     pub last_selection: Option<Selection>,
 
     pub status_msg: Option<(Cow<'static, str>, Severity)>,
+    /// When the current status message expires (see `status-timeout`).
+    pub status_msg_expires: Option<Instant>,
     pub autoinfo: Option<Info>,
 
     pub config: Arc<dyn DynAccess<Config>>,
@@ -1447,6 +1457,7 @@ impl Editor {
                 |config: &Config| &config.clipboard_provider,
             ))),
             status_msg: None,
+            status_msg_expires: None,
             autoinfo: None,
             idle_timer: Box::pin(sleep(conf.idle_timeout)),
             redraw_timer: Box::pin(sleep(Duration::MAX)),
@@ -1528,27 +1539,55 @@ impl Editor {
 
     pub fn clear_status(&mut self) {
         self.status_msg = None;
+        self.status_msg_expires = None;
+    }
+
+    /// How long a status message is shown dimmed before it disappears.
+    pub const STATUS_FADE: Duration = Duration::from_millis(1000);
+
+    /// Sets the status message and, if `status-timeout` is non-zero, schedules
+    /// redraws for when it starts to fade and when it expires.
+    pub fn set_status_msg(&mut self, msg: Cow<'static, str>, severity: Severity) {
+        self.status_msg = Some((msg, severity));
+
+        let timeout = self.config().status_timeout;
+        if timeout.is_zero() {
+            self.status_msg_expires = None;
+            return;
+        }
+        self.status_msg_expires = Some(Instant::now() + timeout);
+
+        // Nothing redraws on its own when the editor is idle, so wake it up.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let fade_start = timeout.saturating_sub(Self::STATUS_FADE);
+            handle.spawn(async move {
+                sleep(fade_start).await;
+                helix_event::request_redraw();
+                sleep(timeout - fade_start).await;
+                helix_event::request_redraw();
+            });
+        }
     }
 
     #[inline]
     pub fn set_status<T: Into<Cow<'static, str>>>(&mut self, status: T) {
         let status = status.into();
         log::debug!("editor status: {}", status);
-        self.status_msg = Some((status, Severity::Info));
+        self.set_status_msg(status, Severity::Info);
     }
 
     #[inline]
     pub fn set_error<T: Into<Cow<'static, str>>>(&mut self, error: T) {
         let error = error.into();
         log::debug!("editor error: {}", error);
-        self.status_msg = Some((error, Severity::Error));
+        self.set_status_msg(error, Severity::Error);
     }
 
     #[inline]
     pub fn set_warning<T: Into<Cow<'static, str>>>(&mut self, warning: T) {
         let warning = warning.into();
         log::warn!("editor warning: {}", warning);
-        self.status_msg = Some((warning, Severity::Warning));
+        self.set_status_msg(warning, Severity::Warning);
     }
 
     #[inline]

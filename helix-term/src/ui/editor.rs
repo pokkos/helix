@@ -1857,24 +1857,73 @@ impl Component for EditorView {
         }
 
         let key_width = 15u16; // for showing pending keys
-        let mut status_msg_width = 0;
+        let status_msg_width = 0;
 
-        // render status msg
-        if let Some((status_msg, severity)) = &cx.editor.status_msg {
-            status_msg_width = status_msg.width();
-            use helix_view::editor::Severity;
-            let style = if *severity == Severity::Error {
-                cx.editor.theme.get("error")
+        // hide the status message once its timeout has passed
+        let mut status_fading = false;
+        if let Some(expires) = cx.editor.status_msg_expires {
+            let now = tokio::time::Instant::now();
+            if now >= expires {
+                cx.editor.clear_status();
             } else {
-                cx.editor.theme.get("ui.text")
-            };
+                status_fading = expires - now <= helix_view::Editor::STATUS_FADE;
+            }
+        }
 
-            surface.set_string(
-                area.x,
-                area.y + area.height.saturating_sub(1),
-                status_msg,
-                style,
-            );
+        // render status msg as a bordered box in the bottom-left corner,
+        // just above the statusline (instead of in the command line row)
+        if let Some((status_msg, severity)) = &cx.editor.status_msg {
+            use helix_view::editor::Severity;
+            use tui::widgets::{Block, Widget};
+
+            let theme = &cx.editor.theme;
+            let text_style = match severity {
+                Severity::Error => theme.get("error"),
+                Severity::Warning => theme.get("warning"),
+                _ => theme.get("ui.text"),
+            };
+            let mut popup_style = theme.get("ui.popup");
+            let mut text_style = text_style;
+            // A terminal can't do real transparency, so "fading" = dimmed for the last second.
+            if status_fading {
+                popup_style = popup_style.add_modifier(Modifier::DIM);
+                text_style = text_style.add_modifier(Modifier::DIM);
+            }
+
+            let lines: Vec<&str> = status_msg.lines().collect();
+            // 2 rows at the bottom: statusline + command line
+            let max_height = area.height.saturating_sub(2);
+            let max_inner_width = area.width.saturating_sub(2);
+            let inner_width = lines
+                .iter()
+                .map(|line| line.width())
+                .max()
+                .unwrap_or(0)
+                .min(max_inner_width as usize) as u16;
+            let height = (lines.len() as u16 + 2).min(max_height);
+
+            if height > 2 && inner_width > 0 {
+                let box_area = Rect::new(
+                    area.x,
+                    area.y + max_height - height,
+                    inner_width + 2,
+                    height,
+                );
+                surface.clear_with(box_area, popup_style);
+                Block::bordered()
+                    .border_style(popup_style)
+                    .render(box_area, surface);
+
+                for (i, line) in lines.iter().take(height as usize - 2).enumerate() {
+                    surface.set_stringn(
+                        box_area.x + 1,
+                        box_area.y + 1 + i as u16,
+                        line,
+                        inner_width as usize,
+                        text_style,
+                    );
+                }
+            }
         }
 
         if area.width.saturating_sub(status_msg_width as u16) > key_width {

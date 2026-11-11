@@ -340,7 +340,7 @@ impl Application {
                         helix_event::status::Severity::Error => Severity::Error,
                     };
                     // TODO: show multiple status messages at once to avoid clobbering
-                    self.editor.status_msg = Some((msg.message, severity));
+                    self.editor.set_status_msg(msg.message, severity);
                     helix_event::request_redraw();
                 }
                 Some(callback) = self.jobs.wait_futures.next() => {

@@ -2417,6 +2417,18 @@ fn searcher(cx: &mut Context, direction: Direction) {
                 wrap_around,
                 false,
             );
+
+            // While typing, report when the pattern matches nothing in the whole
+            // document. With the status message drawn above the statusline, this
+            // stays visible while the prompt is open.
+            if event == PromptEvent::Update {
+                let text = doc!(cx.editor).text().slice(..);
+                if regex.find(text.regex_input()).is_none() {
+                    cx.editor.set_error("No matches");
+                } else {
+                    cx.editor.clear_status();
+                }
+            }
         },
     );
 }
