@@ -808,6 +808,9 @@ pub enum StatusLineElement {
     /// The number of characters currently in primary selection
     PrimarySelectionLength,
 
+    /// The number of lines covered by the primary selection
+    PrimarySelectionLines,
+
     /// The cursor position
     Position,
 

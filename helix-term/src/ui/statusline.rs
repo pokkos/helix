@@ -150,6 +150,9 @@ where
         helix_view::editor::StatusLineElement::PrimarySelectionLength => {
             render_primary_selection_length
         }
+        helix_view::editor::StatusLineElement::PrimarySelectionLines => {
+            render_primary_selection_lines
+        }
         helix_view::editor::StatusLineElement::Position => render_position,
         helix_view::editor::StatusLineElement::PositionPercentage => render_position_percentage,
         helix_view::editor::StatusLineElement::TotalLineNumbers => render_total_line_numbers,
@@ -404,6 +407,23 @@ where
     write(
         context,
         format!(" {} char{} ", tot_sel, if tot_sel == 1 { "" } else { "s" }).into(),
+    );
+}
+
+fn render_primary_selection_lines<'a, F>(context: &mut RenderContext<'a>, write: F)
+where
+    F: Fn(&mut RenderContext<'a>, Span<'a>) + Copy,
+{
+    let text = context.doc.text().slice(..);
+    let (start, end) = context
+        .doc
+        .selection(context.view.id)
+        .primary()
+        .line_range(text);
+    let lines = end - start + 1;
+    write(
+        context,
+        format!(" {} line{} ", lines, if lines == 1 { "" } else { "s" }).into(),
     );
 }
 
