@@ -35,7 +35,7 @@ use helix_view::{
 };
 use std::{mem::take, num::NonZeroUsize, ops, path::PathBuf, rc::Rc};
 
-use tui::{buffer::Buffer as Surface, text::Span};
+use tui::{buffer::Buffer as Surface, text::Span, widgets::BorderType};
 
 pub struct EditorView {
     pub keymaps: Keymaps,
@@ -980,6 +980,7 @@ impl EditorView {
             .unwrap_or_else(|| editor.theme.get("ui.popup"));
         surface.clear_with(box_area, style);
         Block::bordered()
+            .border_type(BorderType::new(editor.config().rounded_corners))
             .border_style(style)
             .render(box_area, surface);
 
@@ -1988,6 +1989,7 @@ impl Component for EditorView {
                 );
                 surface.clear_with(box_area, popup_style);
                 Block::bordered()
+                    .border_type(BorderType::new(cx.editor.config().rounded_corners))
                     .border_style(popup_style)
                     .render(box_area, surface);
 
