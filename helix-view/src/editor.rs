@@ -530,6 +530,10 @@ pub struct BreadcrumbConfig {
     pub enable: bool,
     #[serde(default)]
     pub path: BreadcrumbPathOptions,
+    /// Draw the breadcrumb as a floating box in the bottom-right corner of each
+    /// view (above its statusline) instead of as a row along the top.
+    #[serde(default)]
+    pub floating: bool,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize, Clone, Copy)]

@@ -97,7 +97,7 @@ impl EditorView {
         let text_annotations = view.text_annotations(doc, Some(theme));
         let mut decorations = DecorationManager::default();
 
-        if config.breadcrumb.enable {
+        if config.breadcrumb.enable && !config.breadcrumb.floating {
             Self::render_breadcrumb(editor, doc, view, area.with_height(1), surface);
         }
 
@@ -240,6 +240,10 @@ impl EditorView {
             && config.end_of_line_diagnostics == DiagnosticFilter::Disable
         {
             Self::render_diagnostics(doc, view, inner, surface, theme);
+        }
+
+        if config.breadcrumb.enable && config.breadcrumb.floating {
+            Self::render_floating_breadcrumb(editor, doc, view, surface);
         }
 
         let statusline_area = view
@@ -788,7 +792,7 @@ impl EditorView {
         view: &View,
         viewport: Rect,
         surface: &mut Surface,
-    ) {
+    ) -> u16 {
         use helix_view::editor::BreadcrumbPathOptions::{File, Full};
 
         #[inline]
@@ -934,6 +938,57 @@ impl EditorView {
                 }
 
                 x = draw_element(surface, viewport, x, symbol.name.as_ref(), style);
+            }
+        }
+
+        x
+    }
+
+    /// Draws the breadcrumb as a bordered box in the bottom-right corner of the
+    /// view, just above its statusline. The breadcrumb is first rendered into an
+    /// off-screen row to measure it, then copied into the box.
+    pub fn render_floating_breadcrumb(
+        editor: &Editor,
+        doc: &Document,
+        view: &View,
+        surface: &mut Surface,
+    ) {
+        use tui::widgets::{Block, Widget};
+
+        let area = view.area;
+        // box: 1 content row + 2 border rows, sitting directly above the statusline
+        if area.height < 5 || area.width < 6 {
+            return;
+        }
+
+        let mut row = Surface::empty(Rect::new(0, 0, area.width, 1));
+        let row_area = row.area;
+        // `render_breadcrumb` leaves one column of padding on the left; add one on the right
+        let end = Self::render_breadcrumb(editor, doc, view, row_area, &mut row) + 1;
+
+        let inner_width = end.min(area.width - 2);
+        let box_area = Rect::new(
+            area.right() - (inner_width + 2),
+            area.bottom() - 1 - 3, // statusline is the view's last row
+            inner_width + 2,
+            3,
+        );
+
+        let style = editor
+            .theme
+            .try_get_exact("ui.breadcrumb")
+            .unwrap_or_else(|| editor.theme.get("ui.popup"));
+        surface.clear_with(box_area, style);
+        Block::bordered()
+            .border_style(style)
+            .render(box_area, surface);
+
+        for i in 0..inner_width {
+            if let (Some(src), Some(dst)) = (
+                row.get(i, 0),
+                surface.get_mut(box_area.x + 1 + i, box_area.y + 1),
+            ) {
+                *dst = src.clone();
             }
         }
     }

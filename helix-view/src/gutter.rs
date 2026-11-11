@@ -263,7 +263,8 @@ pub fn breakpoints<'doc>(
 
     let breakpoints = doc.path().and_then(|path| editor.breakpoints.get(path));
 
-    let breadcrumbs_enabled = editor.config().breadcrumb.enable;
+    let breadcrumb = editor.config().breadcrumb;
+    let breadcrumbs_enabled = breadcrumb.enable && !breadcrumb.floating;
 
     let Some(breakpoints) = breakpoints else {
         return Box::new(move |_, _, _, _| None);

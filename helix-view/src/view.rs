@@ -245,7 +245,8 @@ impl View {
     }
 
     pub fn breadcrumb_offset(&self, doc: &Document) -> u16 {
-        u16::from(doc.config.load().breadcrumb.enable)
+        let breadcrumb = doc.config.load().breadcrumb;
+        u16::from(breadcrumb.enable && !breadcrumb.floating)
     }
 
     pub fn offset_coords_to_in_view(
