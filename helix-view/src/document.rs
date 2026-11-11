@@ -62,7 +62,7 @@ const DEFAULT_TAB_WIDTH: usize = 4;
 
 pub const DEFAULT_LANGUAGE_NAME: &str = "text";
 
-pub const SCRATCH_BUFFER_NAME: &str = "[scratch]";
+pub const SCRATCH_BUFFER_NAME: &str = "<scratch>";
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum Mode {

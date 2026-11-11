@@ -821,6 +821,24 @@ impl EditorView {
         let separator_style = editor.theme.get("ui.breadcrumb.separator");
         let mut draw_separator = false;
 
+        // Draw the file name like a bufferline tab: active style in the focused split, inactive style in the others.
+        let tab_style = if editor.tree.focus == view.id {
+            editor
+                .theme
+                .try_get("ui.bufferline.active")
+                .unwrap_or_else(|| editor.theme.get("ui.statusline.active"))
+        } else {
+            editor
+                .theme
+                .try_get("ui.bufferline")
+                .unwrap_or_else(|| editor.theme.get("ui.statusline.inactive"))
+        };
+        let draw_tab = |surface: &mut Surface, x: u16, name: &str| -> u16 {
+            let x = draw_element(surface, viewport, x, " ", tab_style);
+            let x = draw_element(surface, viewport, x, name, tab_style);
+            draw_element(surface, viewport, x, " ", tab_style)
+        };
+
         if matches!(config.breadcrumb.path, Full | File) {
             if let Some(path) = doc.relative_path() {
                 let mut components = path.components().peekable();
@@ -849,13 +867,17 @@ impl EditorView {
                     let segment = component.as_os_str().to_string_lossy();
                     let is_directory = components.peek().is_some();
 
-                    let style = if is_directory {
-                        editor.theme.get("ui.text.directory")
+                    x = if is_directory {
+                        draw_element(
+                            surface,
+                            viewport,
+                            x,
+                            &segment,
+                            editor.theme.get("ui.text.directory"),
+                        )
                     } else {
-                        style
+                        draw_tab(surface, x, &segment)
                     };
-
-                    x = draw_element(surface, viewport, x, &segment, style);
                 }
             } else {
                 // Handle `[scratch]`
