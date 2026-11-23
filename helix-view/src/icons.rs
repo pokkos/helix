@@ -7,7 +7,6 @@ use arc_swap::ArcSwap;
 use hashbrown::HashMap;
 use helix_core::unicode::width::UnicodeWidthStr;
 use helix_stdx::string::StackString;
-use once_cell::sync::Lazy;
 use serde::{de::value::MapAccessDeserializer, Deserialize};
 use smartstring::LazyCompact;
 use std::{
@@ -19,8 +18,7 @@ use std::{
 
 type SmartString = smartstring::SmartString<LazyCompact>;
 
-/// Centralized location for icons that can be used throughout the UI.
-pub static ICONS: Lazy<ArcSwap<Icons>> = Lazy::new(ArcSwap::default);
+pub static ICONS: LazyLock<ArcSwap<Icons>> = LazyLock::new(ArcSwap::default);
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq, Clone)]
 #[serde(default, deny_unknown_fields)]
