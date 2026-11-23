@@ -57,6 +57,7 @@ fn thread_picker(
                 thread_states,
                 move |cx, thread, _action| callback_fn(cx.editor, thread),
             )
+            .with_title("Threads")
             .with_preview(move |editor, thread| {
                 let frames = editor
                     .debug_adapters
@@ -270,12 +271,8 @@ pub fn dap_launch(cx: &mut Context) {
         |item: &DebugTemplate, _| item.name.as_str().into(),
     )];
 
-    cx.push_layer(Box::new(overlaid(Picker::new(
-        columns,
-        0,
-        templates,
-        (),
-        |cx, template, _action| {
+    cx.push_layer(Box::new(overlaid(
+        Picker::new(columns, 0, templates, (), |cx, template, _action| {
             if template.completion.is_empty() {
                 if let Err(err) = dap_start_impl(cx, Some(&template.name), None, None) {
                     cx.editor.set_error(err.to_string());
@@ -293,8 +290,9 @@ pub fn dap_launch(cx: &mut Context) {
                 });
                 cx.jobs.callback(callback);
             }
-        },
-    ))));
+        })
+        .with_title("Debug targets"),
+    )));
 }
 
 pub fn dap_restart(cx: &mut Context) {
@@ -778,6 +776,7 @@ pub fn dap_switch_stack_frame(cx: &mut Context) {
             jump_to_stack_frame(cx.editor, frame);
         },
     )
+    .with_title("Stack frames")
     .with_preview(move |_editor, (_index, frame)| {
         frame.source.as_ref().and_then(|source| {
             source.path.as_ref().map(|path| {

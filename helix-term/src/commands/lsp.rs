@@ -291,6 +291,10 @@ fn diag_picker(
                 .immediately_show_diagnostic(doc, view.id);
         },
     )
+    .with_title(match format {
+        DiagnosticsFormat::HideSourcePath => "Diagnostics",
+        DiagnosticsFormat::ShowSourcePath => "Workspace diagnostics",
+    })
     .with_preview(move |_editor, diag| location_to_file_location(&diag.location))
     .truncate_start(false)
 }
@@ -441,6 +445,7 @@ pub fn symbol_picker(cx: &mut Context) {
                     jump_to_location(cx.editor, &item.location, action);
                 },
             )
+            .with_title("Symbols")
             .with_preview(move |_editor, item| location_to_file_location(&item.location))
             .truncate_start(false);
 
@@ -616,6 +621,7 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
             jump_to_location(cx.editor, &item.location, action);
         },
     )
+    .with_title("Workspace symbols")
     .with_preview(|_editor, item| location_to_file_location(&item.location))
     .with_dynamic_query(get_symbols, None)
     .truncate_start(false);
@@ -938,7 +944,12 @@ impl Display for ApplyEditErrorKind {
 }
 
 /// Precondition: `locations` should be non-empty.
-fn goto_impl(editor: &mut Editor, compositor: &mut Compositor, locations: Vec<Location>) {
+fn goto_impl(
+    editor: &mut Editor,
+    compositor: &mut Compositor,
+    locations: Vec<Location>,
+    title: &'static str,
+) {
     let cwdir = helix_stdx::env::current_working_dir();
 
     match locations.as_slice() {
@@ -963,6 +974,7 @@ fn goto_impl(editor: &mut Editor, compositor: &mut Compositor, locations: Vec<Lo
             let picker = Picker::new(columns, 0, locations, cwdir, |cx, location, action| {
                 jump_to_location(cx.editor, location, action)
             })
+            .with_title(title)
             .with_preview(|_editor, location| location_to_file_location(location));
             compositor.push(Box::new(overlaid(picker)));
         }
@@ -1028,7 +1040,18 @@ where
                     _ => "No location found.",
                 });
             } else {
-                goto_impl(editor, compositor, locations);
+                goto_impl(
+                    editor,
+                    compositor,
+                    locations,
+                    match feature {
+                        LanguageServerFeature::GotoDeclaration => "Declaration",
+                        LanguageServerFeature::GotoDefinition => "Definition",
+                        LanguageServerFeature::GotoTypeDefinition => "Type definition",
+                        LanguageServerFeature::GotoImplementation => "Implementation",
+                        _ => "Locations",
+                    },
+                );
             }
         };
         Ok(Callback::EditorCompositor(Box::new(call)))
@@ -1105,7 +1128,7 @@ pub fn goto_reference(cx: &mut Context) {
             if locations.is_empty() {
                 editor.set_error("No references found.");
             } else {
-                goto_impl(editor, compositor, locations);
+                goto_impl(editor, compositor, locations, "References");
             }
         };
         Ok(Callback::EditorCompositor(Box::new(call)))

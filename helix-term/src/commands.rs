@@ -2865,6 +2865,7 @@ fn global_search(cx: &mut Context) {
             }
         },
     )
+    .with_title("Global search")
     .with_preview(
         |_editor,
          FileResult {
@@ -3470,6 +3471,7 @@ fn make_buffer_picker(editor: &Editor, cursor: Option<u32>) -> impl Component + 
             Ok(call)
         });
     })
+    .with_title("Buffers")
     .with_preview(|editor, meta| {
         let doc = &editor.documents.get(&meta.id)?;
         let lines = doc.selections().values().next().map(|selection| {
@@ -3587,6 +3589,7 @@ fn jumplist_picker(cx: &mut Context) {
             }
         },
     )
+    .with_title("Jumplist")
     .with_preview(|editor, meta| {
         let doc = &editor.documents.get(&meta.id)?;
         let line = meta.selection.primary().cursor_line(doc.text().slice(..));
@@ -3709,6 +3712,7 @@ fn changed_file_picker(cx: &mut Context) {
             }
         },
     )
+    .with_title("Changed files")
     .with_preview(|_editor, meta| Some((meta.path().into(), None)));
 
     let injector = picker.injector();
@@ -3811,7 +3815,8 @@ pub fn command_palette(cx: &mut Context) {
                         doc.append_changes_to_history(view);
                     }
                 }
-            });
+            })
+            .with_title("Commands");
             compositor.push(Box::new(overlaid(picker)));
         },
     ));

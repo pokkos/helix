@@ -285,6 +285,7 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     preview_scroll_cursor: u32,
     /// Called with the selected item and the cursor index when 'Ctrl-x' is pressed.
     close_item_fn: Option<CloseItemCallback<T>>,
+    title: Option<String>,
 }
 
 impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
@@ -414,6 +415,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             preview_height: 0,
             preview_scroll_cursor: 0,
             close_item_fn: None,
+            title: None,
         }
     }
 
@@ -423,6 +425,11 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         close_item_fn: impl Fn(&mut Context, &T, u32) + 'static,
     ) -> Self {
         self.close_item_fn = Some(Box::new(close_item_fn));
+        self
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
         self
     }
 
@@ -730,7 +737,15 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         surface.clear_with(area, background);
 
         let border_type = BorderType::new(cx.editor.config().rounded_corners);
-        let block: Block<'_> = Block::bordered().border_type(border_type);
+        let mut block: Block<'_> = Block::bordered().border_type(border_type);
+        if let Some(title) = &self.title {
+            let title_style = cx
+                .editor
+                .theme
+                .try_get("ui.picker.title")
+                .unwrap_or_else(|| cx.editor.theme.get("ui.text").add_modifier(Modifier::BOLD));
+            block = block.title(Span::styled(format!(" {title} "), title_style));
+        }
 
         // calculate the inner area inside the box
         let inner = block.inner(area);

@@ -316,6 +316,7 @@ pub fn file_picker(editor: &Editor, root: PathBuf) -> FilePicker {
             cx.editor.set_error(err);
         }
     })
+    .with_title("Files")
     .with_preview(|_editor, path| Some((path.as_path().into(), None)));
     let injector = picker.injector();
     let timeout = std::time::Instant::now() + std::time::Duration::from_millis(30);
@@ -417,6 +418,7 @@ pub fn file_explorer(root: PathBuf, editor: &Editor) -> Result<FileExplorer, std
             }
         },
     )
+    .with_title("File explorer")
     .with_preview(|_editor, (path, _is_dir)| Some((path.as_path().into(), None)));
 
     Ok(picker)

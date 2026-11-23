@@ -211,6 +211,7 @@ pub fn syntax_symbol_picker(cx: &mut Context) {
             }
         },
     )
+    .with_title("Symbols")
     .with_preview(|_editor, tag| {
         Some((tag.doc.path_or_id()?, Some((tag.start_line, tag.end_line))))
     })
@@ -454,6 +455,7 @@ pub fn syntax_workspace_symbol_picker(cx: &mut Context) {
         },
     )
     .with_dynamic_query(get_tags, Some(275))
+    .with_title("Workspace symbols")
     .with_preview(move |_editor, tag| {
         Some((
             tag.doc.path_or_id()?,
