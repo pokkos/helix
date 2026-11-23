@@ -113,6 +113,14 @@ pub struct Context<'a> {
     pub jobs: &'a mut Jobs,
 }
 
+struct BufferMeta<'a> {
+    id: DocumentId,
+    path: Option<Cow<'a, Path>>,
+    is_modified: bool,
+    is_current: bool,
+    focused_at: std::time::Instant,
+}
+
 impl Context<'_> {
     /// Push a new component onto the compositor.
     pub fn push_layer(&mut self, component: Box<dyn Component>) {
@@ -3351,15 +3359,13 @@ fn file_explorer_in_current_directory(cx: &mut Context) {
 
 #[allow(clippy::too_many_lines)]
 fn buffer_picker(cx: &mut Context) {
-    struct BufferMeta<'a> {
-        id: DocumentId,
-        path: Option<Cow<'a, Path>>,
-        is_modified: bool,
-        is_current: bool,
-        focused_at: std::time::Instant,
-    }
+    let picker = make_buffer_picker(cx.editor, None);
+    cx.push_layer(Box::new(overlaid(picker)));
+}
 
-    let current = view!(cx.editor).doc;
+/// Builds the buffer picker. 'cursor' restores the selection after a buffer was closed.
+fn make_buffer_picker(editor: &Editor, cursor: Option<u32>) -> impl Component + 'static {
+    let current = view!(editor).doc;
 
     let new_meta = |doc: &Document| BufferMeta {
         id: doc.id(),
@@ -3372,8 +3378,7 @@ fn buffer_picker(cx: &mut Context) {
         focused_at: doc.focused_at,
     };
 
-    let mut items = cx
-        .editor
+    let mut items = editor
         .documents
         .values()
         .map(new_meta)
@@ -3422,14 +3427,10 @@ fn buffer_picker(cx: &mut Context) {
         }),
     ];
 
-    let initial_cursor = if cx
-        .editor
-        .config()
-        .buffer_picker
-        .start_position
-        .is_previous()
-        && !items.is_empty()
-    {
+    let initial_cursor = if let Some(cursor) = cursor {
+        // stay on the same row or the last one if the closed buffer was the last
+        cursor.min(items.len().saturating_sub(1) as u32)
+    } else if editor.config().buffer_picker.start_position.is_previous() && !items.is_empty() {
         1
     } else {
         0
@@ -3439,12 +3440,36 @@ fn buffer_picker(cx: &mut Context) {
         columns,
         2,
         items,
-        cx.editor.theme.clone(),
+        editor.theme.clone(),
         |cx, meta, action| {
             cx.editor.switch(meta.id, action);
         },
     )
     .with_initial_cursor(initial_cursor)
+    .with_close_item_fn(|cx, meta: &BufferMeta, cursor| {
+        // Ctrl-x closes the buffer (refuses if it has unsaved changes), then reopens the updated picker
+        match cx.editor.close_document(meta.id, false) {
+            Ok(()) => {}
+            Err(helix_view::editor::CloseError::BufferModified(name)) => {
+                cx.editor
+                    .set_error(format!("'{name}' has unsaved changes, not closed"));
+            }
+            Err(helix_view::editor::CloseError::SaveError(err)) => {
+                cx.editor.set_error(err.to_string());
+            }
+            Err(helix_view::editor::CloseError::DoesNotExist) => {}
+        }
+
+        cx.jobs.callback(async move {
+            let call: job::Callback = Callback::EditorCompositor(Box::new(
+                move |editor: &mut Editor, compositor: &mut Compositor| {
+                    let picker = make_buffer_picker(editor, Some(cursor));
+                    compositor.push(Box::new(overlaid(picker)));
+                },
+            ));
+            Ok(call)
+        });
+    })
     .with_preview(|editor, meta| {
         let doc = &editor.documents.get(&meta.id)?;
         let lines = doc.selections().values().next().map(|selection| {
@@ -3454,7 +3479,7 @@ fn buffer_picker(cx: &mut Context) {
         Some((meta.id.into(), lines))
     });
 
-    cx.push_layer(Box::new(overlaid(picker)));
+    picker
 }
 
 #[allow(clippy::too_many_lines)]

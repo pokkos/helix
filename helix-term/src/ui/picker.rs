@@ -283,6 +283,8 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     /// Selected item the current `preview_scroll_offset` applies to; the scroll resets
     /// to the top when the selection changes.
     preview_scroll_cursor: u32,
+    /// Called with the selected item and the cursor index when 'Ctrl-x' is pressed.
+    close_item_fn: Option<CloseItemCallback<T>>,
 }
 
 impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
@@ -411,7 +413,17 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             preview_scroll_offset: 0,
             preview_height: 0,
             preview_scroll_cursor: 0,
+            close_item_fn: None,
         }
+    }
+
+    /// Enables 'Ctrl-x' in this picker. The picker closes afterwards; the callback can reopen it to show the updated list
+    pub fn with_close_item_fn(
+        mut self,
+        close_item_fn: impl Fn(&mut Context, &T, u32) + 'static,
+    ) -> Self {
+        self.close_item_fn = Some(Box::new(close_item_fn));
+        self
     }
 
     pub fn injector(&self) -> Injector<T, D> {
@@ -1275,8 +1287,6 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
     }
 
     fn handle_event(&mut self, event: &Event, ctx: &mut Context) -> EventResult {
-        // TODO: keybinds for scrolling preview
-
         let key_event = match event {
             Event::Key(event) => *event,
             Event::Paste(..) => return self.prompt_handle_event(event, ctx),
@@ -1391,6 +1401,13 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             ctrl!('t') => {
                 self.toggle_preview();
             }
+            ctrl!('x') if self.close_item_fn.is_some() => {
+                if let (Some(option), Some(close_item_fn)) = (self.selection(), &self.close_item_fn)
+                {
+                    close_item_fn(ctx, option, self.cursor);
+                }
+                return close_fn(self);
+            }
             _ => {
                 self.prompt_handle_event(event, ctx);
             }
@@ -1428,3 +1445,4 @@ impl<T: 'static + Send + Sync, D> Drop for Picker<T, D> {
 }
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
+type CloseItemCallback<T> = Box<dyn Fn(&mut Context, &T, u32)>;

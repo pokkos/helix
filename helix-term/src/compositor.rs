@@ -185,6 +185,8 @@ impl Compositor {
         for layer in &mut self.layers {
             layer.render(area, surface, cx);
         }
+        // status message go on top of everything, including pickers and popups
+        crate::ui::EditorView::render_status_box(area, surface, cx);
     }
 
     pub fn cursor(&self, area: Rect, editor: &Editor) -> (Option<Position>, CursorKind) {
