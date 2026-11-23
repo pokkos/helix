@@ -88,6 +88,10 @@ impl CompletionItemKind {
             _ => "",
         }
     }
+
+    pub fn all() -> Vec<Self> {
+        (Self::TEXT.0..=Self::TYPE_PARAMETER.0).map(Self).collect()
+    }
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Default, Deserialize, Serialize)]
