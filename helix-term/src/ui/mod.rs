@@ -859,6 +859,44 @@ pub mod completers {
     }
 }
 
+pub fn symbol_kind_style(
+    theme: &Theme,
+    kind: helix_lsp::lsp::SymbolKind,
+    default: helix_view::graphics::Style,
+) -> helix_view::graphics::Style {
+    use helix_lsp::lsp::SymbolKind;
+
+    match kind {
+        SymbolKind::MODULE
+        | SymbolKind::NAMESPACE
+        | SymbolKind::PACKAGE => theme.get("namespace"),
+
+        SymbolKind::OBJECT // impl Block
+        | SymbolKind::STRUCT
+        | SymbolKind::INTERFACE
+        | SymbolKind::CLASS => theme.get("type"),
+
+        SymbolKind::METHOD | SymbolKind::FUNCTION => theme.get("function"),
+
+        SymbolKind::ENUM => theme.get("type.enum"),
+        SymbolKind::ENUM_MEMBER => theme.get("type.enum.variant"),
+
+        SymbolKind::FIELD | SymbolKind::PROPERTY => theme.get("variable.other.member"),
+        
+        SymbolKind::VARIABLE => theme.get("variable"),
+        SymbolKind::CONSTANT => theme.get("constant"),
+        SymbolKind::CONSTRUCTOR => theme.get("constructor"),
+        SymbolKind::STRING => theme.get("string"),
+        SymbolKind::NUMBER => theme.get("constant.numeric"),
+        SymbolKind::BOOLEAN => theme.get("constant.builtin.boolean"),
+        SymbolKind::ARRAY => theme.get("punctuation.bracket"),
+        SymbolKind::KEY => theme.get("label"),
+        SymbolKind::NULL => theme.get("constant.builtin"),
+        SymbolKind::TYPE_PARAMETER => theme.get("type.parameter"),
+        _ => default,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs::{create_dir, File};

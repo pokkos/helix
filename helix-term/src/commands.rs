@@ -3447,30 +3447,34 @@ fn make_buffer_picker(editor: &Editor, cursor: Option<u32>) -> impl Component + 
         },
     )
     .with_initial_cursor(initial_cursor)
-    .with_close_item_fn(|cx, meta: &BufferMeta, cursor| {
-        // Ctrl-x closes the buffer (refuses if it has unsaved changes), then reopens the updated picker
-        match cx.editor.close_document(meta.id, false) {
-            Ok(()) => {}
-            Err(helix_view::editor::CloseError::BufferModified(name)) => {
-                cx.editor
-                    .set_error(format!("'{name}' has unsaved changes, not closed"));
+    .with_key_action(
+        crate::ctrl!('x'),
+        |cx, meta: Option<&BufferMeta>, cursor, _query| {
+            // Ctrl-x closes the buffer (refuses if it has unsaved changes), then reopens the updated picker
+            let Some(meta) = meta else { return };
+            match cx.editor.close_document(meta.id, false) {
+                Ok(()) => {}
+                Err(helix_view::editor::CloseError::BufferModified(name)) => {
+                    cx.editor
+                        .set_error(format!("'{name}' has unsaved changes, not closed"));
+                }
+                Err(helix_view::editor::CloseError::SaveError(err)) => {
+                    cx.editor.set_error(err.to_string());
+                }
+                Err(helix_view::editor::CloseError::DoesNotExist) => {}
             }
-            Err(helix_view::editor::CloseError::SaveError(err)) => {
-                cx.editor.set_error(err.to_string());
-            }
-            Err(helix_view::editor::CloseError::DoesNotExist) => {}
-        }
 
-        cx.jobs.callback(async move {
-            let call: job::Callback = Callback::EditorCompositor(Box::new(
-                move |editor: &mut Editor, compositor: &mut Compositor| {
-                    let picker = make_buffer_picker(editor, Some(cursor));
-                    compositor.push(Box::new(overlaid(picker)));
-                },
-            ));
-            Ok(call)
-        });
-    })
+            cx.jobs.callback(async move {
+                let call: job::Callback = Callback::EditorCompositor(Box::new(
+                    move |editor: &mut Editor, compositor: &mut Compositor| {
+                        let picker = make_buffer_picker(editor, Some(cursor));
+                        compositor.push(Box::new(overlaid(picker)));
+                    },
+                ));
+                Ok(call)
+            });
+        },
+    )
     .with_title("Buffers")
     .with_preview(|editor, meta| {
         let doc = &editor.documents.get(&meta.id)?;

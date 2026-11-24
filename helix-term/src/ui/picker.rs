@@ -34,7 +34,7 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     sync::{
-        atomic::{self, AtomicUsize},
+        atomic::{self, AtomicBool, AtomicUsize},
         Arc,
     },
 };
@@ -49,6 +49,7 @@ use helix_view::{
     editor::Action,
     graphics::{CursorKind, Margin, Modifier, Rect},
     icons::ICONS,
+    input::KeyEvent,
     theme::Style,
     view::ViewPosition,
     Document, DocumentId, Editor,
@@ -194,6 +195,7 @@ type ColumnFormatFn<T, D> = for<'a> fn(&'a T, &'a D) -> Cell<'a>;
 pub struct Column<T, D> {
     name: Arc<str>,
     format: ColumnFormatFn<T, D>,
+    filter_format: Option<ColumnFormatFn<T, D>>,
     /// Whether the column should be passed to nucleo for matching and filtering.
     /// `DynamicPicker` uses this so that the dynamic column (for example regex in
     /// global search) is not used for filtering twice.
@@ -206,6 +208,7 @@ impl<T, D> Column<T, D> {
         Self {
             name: name.into(),
             format,
+            filter_format: None,
             filter: true,
             hidden: false,
         }
@@ -218,9 +221,15 @@ impl<T, D> Column<T, D> {
         Self {
             name: name.into(),
             format,
+            filter_format: None,
             filter: false,
             hidden: true,
         }
+    }
+
+    pub fn with_filter_text(mut self, filter_format: ColumnFormatFn<T, D>) -> Self {
+        self.filter_format = Some(filter_format);
+        self
     }
 
     pub fn without_filtering(mut self) -> Self {
@@ -233,7 +242,8 @@ impl<T, D> Column<T, D> {
     }
 
     fn format_text<'a>(&self, item: &'a T, data: &'a D) -> Cow<'a, str> {
-        let text: String = self.format(item, data).content.into();
+        let format = self.filter_format.unwrap_or(self.format);
+        let text: String = format(item, data).content.into();
         text.into()
     }
 }
@@ -283,8 +293,10 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     /// Selected item the current `preview_scroll_offset` applies to; the scroll resets
     /// to the top when the selection changes.
     preview_scroll_cursor: u32,
-    /// Called with the selected item and the cursor index when 'Ctrl-x' is pressed.
-    close_item_fn: Option<CloseItemCallback<T>>,
+    /// Extra keys with picker-specific actions
+    key_actions: Vec<(KeyEvent, KeyActionCallback<T>)>,
+    /// Set to 'true' while the query is not empty
+    query_flag: Option<Arc<AtomicBool>>,
     title: Option<String>,
 }
 
@@ -414,17 +426,32 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             preview_scroll_offset: 0,
             preview_height: 0,
             preview_scroll_cursor: 0,
-            close_item_fn: None,
+            key_actions: Vec::new(),
+            query_flag: None,
             title: None,
         }
     }
 
-    /// Enables 'Ctrl-x' in this picker. The picker closes afterwards; the callback can reopen it to show the updated list
-    pub fn with_close_item_fn(
+    /// Adds a picker-specific key. The callback gets the selected item, the cursor index and the current query.
+    /// The picker closes afterwards; the callback can reopen it (e.g. through a callback) to show an updated list.
+    pub fn with_key_action(
         mut self,
-        close_item_fn: impl Fn(&mut Context, &T, u32) + 'static,
+        key: KeyEvent,
+        action: impl Fn(&mut Context, Option<&T>, u32, &str) + 'static,
     ) -> Self {
-        self.close_item_fn = Some(Box::new(close_item_fn));
+        self.key_actions.push((key, Box::new(action)));
+        self
+    }
+
+    pub fn with_query(mut self, query: impl Into<String>, editor: &Editor) -> Self {
+        self.prompt.set_line(query.into(), editor);
+        self.handle_prompt_change(false);
+        self
+    }
+
+    pub fn with_query_flag(mut self, flag: Arc<AtomicBool>) -> Self {
+        flag.store(!self.prompt.line().is_empty(), atomic::Ordering::Relaxed);
+        self.query_flag = Some(flag);
         self
     }
 
@@ -719,6 +746,9 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
     }
 
     fn render_picker(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        if let Some(flag) = &self.query_flag {
+            flag.store(!self.prompt.line().is_empty(), atomic::Ordering::Relaxed);
+        }
         let status = self.matcher.tick(10);
         let snapshot = self.matcher.snapshot();
         if status.changed {
@@ -1335,6 +1365,12 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             EventResult::Consumed(Some(callback))
         };
 
+        if let Some((_, action)) = self.key_actions.iter().find(|(key, _)| *key == key_event) {
+            let query = self.prompt.line().clone();
+            action(ctx, self.selection(), self.cursor, &query);
+            return close_fn(self);
+        }
+
         match key_event {
             shift!(Tab) | key!(Up) | ctrl!('p') => {
                 self.move_by(1, Direction::Backward);
@@ -1416,13 +1452,6 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
             ctrl!('t') => {
                 self.toggle_preview();
             }
-            ctrl!('x') if self.close_item_fn.is_some() => {
-                if let (Some(option), Some(close_item_fn)) = (self.selection(), &self.close_item_fn)
-                {
-                    close_item_fn(ctx, option, self.cursor);
-                }
-                return close_fn(self);
-            }
             _ => {
                 self.prompt_handle_event(event, ctx);
             }
@@ -1460,4 +1489,4 @@ impl<T: 'static + Send + Sync, D> Drop for Picker<T, D> {
 }
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
-type CloseItemCallback<T> = Box<dyn Fn(&mut Context, &T, u32)>;
+type KeyActionCallback<T> = Box<dyn Fn(&mut Context, Option<&T>, u32, &str)>;

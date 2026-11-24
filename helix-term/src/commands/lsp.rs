@@ -42,7 +42,10 @@ use std::{
     fmt::Display,
     future::Future,
     path::Path,
-    sync::Arc,
+    sync::{
+        atomic::{self, AtomicBool},
+        Arc,
+    },
 };
 
 /// Gets the first language server that is attached to a document which supports a specific feature.
@@ -94,6 +97,7 @@ fn lsp_location_to_location(
     })
 }
 
+#[derive(Clone)]
 struct SymbolInformationItem {
     location: Location,
     symbol: lsp::SymbolInformation,
@@ -299,33 +303,231 @@ fn diag_picker(
     .truncate_start(false)
 }
 
+struct SymbolNode {
+    item: SymbolInformationItem,
+    parent: Option<usize>,
+    is_local: bool,
+}
+
+struct DocumentSymbolItem {
+    node: usize,
+    item: SymbolInformationItem,
+    tree_prefix: String,
+    path: String,
+}
+
+struct SymbolPickerData {
+    theme: Arc<Theme>,
+    query_active: Arc<AtomicBool>,
+}
+
+/// Flattens the symbol tree into picker rows, in document order, with tree lines computed for the rows
+/// that are actually shown.
+fn document_symbol_items(nodes: &[SymbolNode], show_locals: bool) -> Vec<DocumentSymbolItem> {
+    let visible = |i: usize| show_locals || !nodes[i].is_local;
+    let mut last_child: HashMap<Option<usize>, usize> = HashMap::new();
+
+    for (i, node) in nodes.iter().enumerate() {
+        if visible(i) {
+            last_child.insert(node.parent, i);
+        }
+    }
+    let is_last = |i: usize| last_child.get(&nodes[i].parent) == Some(&i);
+
+    (0..nodes.len())
+        .filter(|&i| visible(i))
+        .map(|i| {
+            let node = &nodes[i];
+            let mut ancestors = Vec::new();
+            let mut parent = node.parent;
+            while let Some(p) = parent {
+                ancestors.push(p);
+                parent = nodes[p].parent;
+            }
+            ancestors.reverse();
+
+            let mut tree_prefix = String::new();
+            if !ancestors.is_empty() {
+                for &ancestor in &ancestors[1..] {
+                    tree_prefix.push_str(if is_last(ancestor) { "   " } else { "│  " });
+                }
+                tree_prefix.push_str(if is_last(i) { "└─ " } else { "├─ " });
+            }
+
+            let path = if ancestors.is_empty() {
+                node.item.symbol.container_name.clone().unwrap_or_default()
+            } else {
+                ancestors
+                    .iter()
+                    .map(|&a| nodes[a].item.symbol.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" › ")
+            };
+
+            DocumentSymbolItem {
+                node: i,
+                item: node.item.clone(),
+                tree_prefix,
+                path,
+            }
+        })
+        .collect()
+}
+
+fn open_document_symbol_picker(
+    editor: &Editor,
+    compositor: &mut Compositor,
+    nodes: Arc<Vec<SymbolNode>>,
+    show_locals: bool,
+    query: String,
+    selected: Option<usize>,
+) {
+    let items = document_symbol_items(&nodes, show_locals);
+
+    let initial_cursor = selected
+        .filter(|_| query.is_empty())
+        .and_then(|mut node| loop {
+            if let Some(row) = items.iter().position(|item| item.node == node) {
+                break Some(row as u32);
+            }
+            node = nodes[node].parent?;
+        })
+        .unwrap_or(0);
+
+    let query_active = Arc::new(AtomicBool::new(false));
+    let data = SymbolPickerData {
+        theme: editor.theme.clone(),
+        query_active: query_active.clone(),
+    };
+
+    let columns = [
+        ui::PickerColumn::new(
+            "kind",
+            |item: &DocumentSymbolItem, data: &SymbolPickerData| {
+                let name = item.item.symbol.kind.as_str();
+                let icons = ICONS.load();
+                let mut line = Vec::new();
+                if let Some(icon) = icons.kind().get(name) {
+                    line.push(Span::styled(
+                        icon.to_string(),
+                        data.theme
+                            .try_get_exact(&stack_format!("icons.kind.{name}"))
+                            .unwrap_or_else(|| icon.style()),
+                    ));
+                }
+
+                line.push(Span::raw(name));
+                Cell::from(Spans::from(line))
+            },
+        ),
+        ui::PickerColumn::new(
+            "name",
+            |item: &DocumentSymbolItem, data: &SymbolPickerData| {
+                let mut line = Vec::new();
+                if !data.query_active.load(atomic::Ordering::Relaxed)
+                    && !item.tree_prefix.is_empty()
+                {
+                    line.push(Span::styled(
+                        item.tree_prefix.as_str(),
+                        data.theme.get("ui.virtual.indent-guide"),
+                    ));
+                }
+                let style =
+                    ui::symbol_kind_style(&data.theme, item.item.symbol.kind, Style::default());
+                line.push(Span::styled(item.item.symbol.name.as_str(), style));
+                Cell::from(Spans::from(line))
+            },
+        )
+        .with_filter_text(|item: &DocumentSymbolItem, _| item.item.symbol.name.as_str().into()),
+        ui::PickerColumn::new("container", |item: &DocumentSymbolItem, _| {
+            item.path.as_str().into()
+        }),
+    ];
+
+    let picker = Picker::new(columns, 1, items, data, move |cx, item, action| {
+        jump_to_location(cx.editor, &item.item.location, action);
+    })
+    .with_title(if show_locals {
+        "Symbols (with locals)"
+    } else {
+        "Symbols"
+    })
+    .with_query(query, editor)
+    .with_query_flag(query_active)
+    .with_initial_cursor(initial_cursor)
+    .with_key_action(crate::ctrl!('l'), move |cx, item, _cursor, query| {
+        let nodes = nodes.clone();
+        let query = query.to_string();
+        let selected = item.map(|item| item.node);
+        cx.jobs.callback(async move {
+            let call = move |editor: &mut Editor, compositor: &mut Compositor| {
+                open_document_symbol_picker(
+                    editor,
+                    compositor,
+                    nodes,
+                    !show_locals,
+                    query,
+                    selected,
+                );
+            };
+            Ok(Callback::EditorCompositor(Box::new(call)))
+        });
+    })
+    .with_preview(move |_editor, item| location_to_file_location(&item.item.location))
+    .truncate_start(false);
+
+    compositor.push(Box::new(overlaid(picker)));
+}
+
 #[allow(clippy::too_many_lines)]
 pub fn symbol_picker(cx: &mut Context) {
-    fn nested_to_flat(
-        list: &mut Vec<SymbolInformationItem>,
+    fn collect_nested(
+        nodes: &mut Vec<SymbolNode>,
         file: &lsp::TextDocumentIdentifier,
         uri: &Uri,
         symbol: lsp::DocumentSymbol,
         offset_encoding: OffsetEncoding,
+        parent: Option<usize>,
+        in_function: bool,
     ) {
+        let index = nodes.len();
+        let kind = symbol.kind;
         #[allow(deprecated)]
-        list.push(SymbolInformationItem {
-            symbol: lsp::SymbolInformation {
-                name: symbol.name,
-                kind: symbol.kind,
-                tags: symbol.tags,
-                deprecated: symbol.deprecated,
-                location: lsp::Location::new(file.uri.clone(), symbol.selection_range),
-                container_name: None,
+        nodes.push(SymbolNode {
+            item: SymbolInformationItem {
+                symbol: lsp::SymbolInformation {
+                    name: symbol.name,
+                    kind: symbol.kind,
+                    tags: symbol.tags,
+                    deprecated: symbol.deprecated,
+                    location: lsp::Location::new(file.uri.clone(), symbol.selection_range),
+                    container_name: None,
+                },
+                location: Location {
+                    uri: uri.clone(),
+                    range: symbol.selection_range,
+                    offset_encoding,
+                },
             },
-            location: Location {
-                uri: uri.clone(),
-                range: symbol.selection_range,
-                offset_encoding,
-            },
+            parent,
+            is_local: in_function,
         });
+
+        let in_function = in_function
+            || matches!(
+                kind,
+                lsp::SymbolKind::FUNCTION | lsp::SymbolKind::METHOD | lsp::SymbolKind::CONSTRUCTOR
+            );
         for child in symbol.children.into_iter().flatten() {
-            nested_to_flat(list, file, uri, child, offset_encoding);
+            collect_nested(
+                nodes,
+                file,
+                uri,
+                child,
+                offset_encoding,
+                Some(index),
+                in_function,
+            );
         }
     }
     let doc = doc!(cx.editor);
@@ -348,35 +550,41 @@ pub fn symbol_picker(cx: &mut Context) {
                     Some(symbols) => symbols,
                     None => return anyhow::Ok(vec![]),
                 };
-                // lsp has two ways to represent symbols (flat/nested)
-                // convert the nested variant to flat, so that we have a homogeneous list
-                let symbols = match symbols {
+                // lsp has two ways to represent symbols (flat/nested). Flat symbols
+                // become top-level nodes, nested ones keep their tree structure.
+                let nodes = match symbols {
                     lsp::DocumentSymbolResponse::Flat(symbols) => symbols
                         .into_iter()
-                        .map(|symbol| SymbolInformationItem {
-                            location: Location {
-                                uri: doc_uri.clone(),
-                                range: symbol.location.range,
-                                offset_encoding,
+                        .map(|symbol| SymbolNode {
+                            item: SymbolInformationItem {
+                                location: Location {
+                                    uri: doc_uri.clone(),
+                                    range: symbol.location.range,
+                                    offset_encoding,
+                                },
+                                symbol,
                             },
-                            symbol,
+                            parent: None,
+                            is_local: false,
                         })
                         .collect(),
                     lsp::DocumentSymbolResponse::Nested(symbols) => {
-                        let mut flat_symbols = Vec::new();
+                        let mut nodes = Vec::new();
                         for symbol in symbols {
-                            nested_to_flat(
-                                &mut flat_symbols,
+                            collect_nested(
+                                &mut nodes,
                                 &doc_id,
                                 &doc_uri,
                                 symbol,
                                 offset_encoding,
+                                None,
+                                false,
                             )
                         }
-                        flat_symbols
+                        nodes
                     }
                 };
-                Ok(symbols)
+                Ok(nodes)
             }
         })
         .collect();
@@ -388,68 +596,31 @@ pub fn symbol_picker(cx: &mut Context) {
     }
 
     cx.jobs.callback(async move {
-        let mut symbols = Vec::new();
+        let mut nodes: Vec<SymbolNode> = Vec::new();
 
         while let Some(response) = futures.next().await {
             match response {
-                Ok(mut items) => symbols.append(&mut items),
+                Ok(server_nodes) => {
+                    // parent indices are relative to each server's list
+                    let offset = nodes.len();
+                    nodes.extend(server_nodes.into_iter().map(|mut node| {
+                        node.parent = node.parent.map(|p| p + offset);
+                        node
+                    }));
+                }
                 Err(err) => log::error!("Error requesting document symbols: {err}"),
             }
         }
 
         let call = move |editor: &mut Editor, compositor: &mut Compositor| {
-            let columns = [
-                ui::PickerColumn::new(
-                    "kind",
-                    |item: &SymbolInformationItem, theme: &Arc<Theme>| {
-                        let name = item.symbol.kind.as_str();
-                        let icons = ICONS.load();
-
-                        let mut line = Vec::new();
-
-                        if let Some(icon) = icons.kind().get(name) {
-                            line.push(Span::styled(
-                                icon.to_string(),
-                                theme
-                                    .try_get_exact(&stack_format!("icons.kind.{name}"))
-                                    .unwrap_or_else(|| icon.style()),
-                            ));
-                        }
-
-                        line.push(Span::raw(name));
-
-                        Cell::from(Spans::from(line))
-                    },
-                ),
-                // Some symbols in the document symbol picker may have a URI that isn't
-                // the current file. It should be rare though, so we concatenate that
-                // URI in with the symbol name in this picker.
-                ui::PickerColumn::new("name", |item: &SymbolInformationItem, _| {
-                    item.symbol.name.as_str().into()
-                }),
-                ui::PickerColumn::new("container", |item: &SymbolInformationItem, _| {
-                    item.symbol
-                        .container_name
-                        .as_deref()
-                        .unwrap_or_default()
-                        .into()
-                }),
-            ];
-
-            let picker = Picker::new(
-                columns,
-                1, // name column
-                symbols,
-                editor.theme.clone(),
-                move |cx, item, action| {
-                    jump_to_location(cx.editor, &item.location, action);
-                },
-            )
-            .with_title("Symbols")
-            .with_preview(move |_editor, item| location_to_file_location(&item.location))
-            .truncate_start(false);
-
-            compositor.push(Box::new(overlaid(picker)))
+            open_document_symbol_picker(
+                editor,
+                compositor,
+                Arc::new(nodes),
+                false,
+                String::new(),
+                None,
+            );
         };
 
         Ok(Callback::EditorCompositor(Box::new(call)))
@@ -589,9 +760,13 @@ pub fn workspace_symbol_picker(cx: &mut Context) {
                 Cell::from(Spans::from(line))
             },
         ),
-        ui::PickerColumn::new("name", |item: &SymbolInformationItem, _| {
-            item.symbol.name.as_str().into()
-        })
+        ui::PickerColumn::new(
+            "name",
+            |item: &SymbolInformationItem, theme: &Arc<Theme>| {
+                let style = ui::symbol_kind_style(theme, item.symbol.kind, Style::default());
+                Span::styled(item.symbol.name.as_str(), style).into()
+            },
+        )
         .without_filtering(),
         ui::PickerColumn::new("container", |item: &SymbolInformationItem, _| {
             item.symbol
