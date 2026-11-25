@@ -301,6 +301,7 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
     key_actions: Vec<(KeyEvent, KeyActionCallback<T>)>,
     /// Set to 'true' while the query is not empty
     query_flag: Option<Arc<AtomicBool>>,
+    query_change_fn: Option<QueryChangeCallback<T>>,
     title: Option<String>,
 }
 
@@ -434,6 +435,7 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             preview_scroll_cursor: 0,
             key_actions: Vec::new(),
             query_flag: None,
+            query_change_fn: None,
             title: None,
         }
     }
@@ -459,6 +461,24 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         flag.store(!self.prompt.line().is_empty(), atomic::Ordering::Relaxed);
         self.query_flag = Some(flag);
         self
+    }
+
+    pub fn with_query_change_fn(
+        mut self,
+        query_change_fn: impl Fn(&str) -> Option<Vec<T>> + 'static,
+    ) -> Self {
+        self.query_change_fn = Some(Box::new(query_change_fn));
+        self
+    }
+
+    fn replace_items(&mut self, items: Vec<T>) {
+        self.matcher.restart(false);
+        let injector = self.injector();
+        for item in items {
+            if injector.push(item).is_err() {
+                break;
+            }
+        }
     }
 
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
@@ -652,6 +672,13 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
         }
         // If the query has meaningfully changed, reset the cursor to the top of the results.
         self.cursor = 0;
+        if let Some(items) = self
+            .query_change_fn
+            .as_ref()
+            .and_then(|query_change_fn| query_change_fn(self.prompt.line()))
+        {
+            self.replace_items(items);
+        }
         // Have nucleo reparse each changed column.
         for (i, column) in self
             .columns
@@ -1519,3 +1546,4 @@ impl<T: 'static + Send + Sync, D> Drop for Picker<T, D> {
 
 type PickerCallback<T> = Box<dyn Fn(&mut Context, &T, Action)>;
 type KeyActionCallback<T> = Box<dyn Fn(&mut Context, Option<&T>, u32, &str)>;
+type QueryChangeCallback<T> = Box<dyn Fn(&str) -> Option<Vec<T>>>;

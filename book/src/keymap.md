@@ -485,6 +485,8 @@ See the documentation page on [pickers](./pickers.md) for more info.
 | `Ctrl-t`                     | Transpose the picker and the preview                       |
 | `Ctrl-x`                     | Close selected item                                        |
 | `Escape`, `Ctrl-c`           | Close picker                                               |
+| `Ctrl-f`                     | Toggle fold on parent in symbol picker                     |
+| `Alt-f`                      | Toggle fold all in symbol picker                           |
 
 ## Prompt
 

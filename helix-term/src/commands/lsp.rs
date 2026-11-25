@@ -305,28 +305,86 @@ fn diag_picker(
 
 struct SymbolNode {
     item: SymbolInformationItem,
+    /// Index of the parent node, `None` for top-level symbols.
     parent: Option<usize>,
+    /// Nested inside a function, method or constructor (e.g. a local `let`).
     is_local: bool,
 }
 
-struct DocumentSymbolItem {
-    node: usize,
-    item: SymbolInformationItem,
-    tree_prefix: String,
-    path: String,
+/// What the document symbol picker shows. Carried along when it reopens.
+#[derive(Clone, Default)]
+struct SymbolPickerView {
+    /// Toggled with `Ctrl-l`.
+    show_locals: bool,
+    /// Parents whose children are hidden, toggled with `Ctrl-f` / `Alt-f`.
+    folded: HashSet<usize>,
 }
 
+/// One row of the document symbol picker.
+struct DocumentSymbolItem {
+    /// Index into the symbol tree, used to keep the selection when reopening.
+    node: usize,
+    item: SymbolInformationItem,
+    /// Tree lines such as `├─ `. Only drawn while the query is empty.
+    tree_prefix: String,
+    /// Names of the parents, e.g. `impl EditorView › render_view`.
+    path: String,
+    /// Number of direct children (with the current locals setting).
+    children: usize,
+    /// Whether this row's children are folded away.
+    folded: bool,
+}
+
+/// Data for the column format functions of the document symbol picker.
 struct SymbolPickerData {
     theme: Arc<Theme>,
+    /// Kept up to date by the picker: `true` while a query is typed.
     query_active: Arc<AtomicBool>,
 }
 
-/// Flattens the symbol tree into picker rows, in document order, with tree lines computed for the rows
-/// that are actually shown.
-fn document_symbol_items(nodes: &[SymbolNode], show_locals: bool) -> Vec<DocumentSymbolItem> {
-    let visible = |i: usize| show_locals || !nodes[i].is_local;
-    let mut last_child: HashMap<Option<usize>, usize> = HashMap::new();
+/// `▾` for an open parent, `▸` for a folded one, `None` for other symbols.
+fn fold_marker(item: &DocumentSymbolItem) -> Option<&'static str> {
+    match (item.children > 0, item.folded) {
+        (false, _) => None,
+        (true, false) => Some("▾"),
+        (true, true) => Some("▸"),
+    }
+}
 
+/// Flattens the symbol tree into picker rows, in document order, with tree lines
+/// computed for the rows that are actually shown. Folds are only applied with
+/// `apply_folds`, so a search always covers every symbol.
+fn document_symbol_items(
+    nodes: &[SymbolNode],
+    view: &SymbolPickerView,
+    apply_folds: bool,
+) -> Vec<DocumentSymbolItem> {
+    let shown = |i: usize| view.show_locals || !nodes[i].is_local;
+
+    let mut children = vec![0usize; nodes.len()];
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(parent) = node.parent.filter(|_| shown(i)) {
+            children[parent] += 1;
+        }
+    }
+
+    let is_folded = |i: usize| apply_folds && children[i] > 0 && view.folded.contains(&i);
+    let visible = |i: usize| {
+        if !shown(i) {
+            return false;
+        }
+        let mut parent = nodes[i].parent;
+        while let Some(p) = parent {
+            if is_folded(p) {
+                return false;
+            }
+            parent = nodes[p].parent;
+        }
+        true
+    };
+
+    // the last visible child of every parent decides between `├─` and `└─`
+    let mut last_child: HashMap<Option<usize>, usize> = HashMap::new();
     for (i, node) in nodes.iter().enumerate() {
         if visible(i) {
             last_child.insert(node.parent, i);
@@ -338,6 +396,8 @@ fn document_symbol_items(nodes: &[SymbolNode], show_locals: bool) -> Vec<Documen
         .filter(|&i| visible(i))
         .map(|i| {
             let node = &nodes[i];
+
+            // ancestors, top-level first
             let mut ancestors = Vec::new();
             let mut parent = node.parent;
             while let Some(p) = parent {
@@ -348,6 +408,7 @@ fn document_symbol_items(nodes: &[SymbolNode], show_locals: bool) -> Vec<Documen
 
             let mut tree_prefix = String::new();
             if !ancestors.is_empty() {
+                // top-level symbols have no line of their own, so skip the first ancestor
                 for &ancestor in &ancestors[1..] {
                     tree_prefix.push_str(if is_last(ancestor) { "   " } else { "│  " });
                 }
@@ -355,6 +416,7 @@ fn document_symbol_items(nodes: &[SymbolNode], show_locals: bool) -> Vec<Documen
             }
 
             let path = if ancestors.is_empty() {
+                // flat responses carry their own container name
                 node.item.symbol.container_name.clone().unwrap_or_default()
             } else {
                 ancestors
@@ -369,21 +431,42 @@ fn document_symbol_items(nodes: &[SymbolNode], show_locals: bool) -> Vec<Documen
                 item: node.item.clone(),
                 tree_prefix,
                 path,
+                children: children[i],
+                folded: is_folded(i),
             }
         })
         .collect()
+}
+
+/// Schedules reopening the document symbol picker, e.g. after a key action.
+fn reopen_document_symbol_picker(
+    cx: &mut compositor::Context,
+    nodes: Arc<Vec<SymbolNode>>,
+    view: SymbolPickerView,
+    query: &str,
+    selected: Option<usize>,
+) {
+    let query = query.to_string();
+    cx.jobs.callback(async move {
+        let call = move |editor: &mut Editor, compositor: &mut Compositor| {
+            open_document_symbol_picker(editor, compositor, nodes, view, query, selected);
+        };
+        Ok(Callback::EditorCompositor(Box::new(call)))
+    });
 }
 
 fn open_document_symbol_picker(
     editor: &Editor,
     compositor: &mut Compositor,
     nodes: Arc<Vec<SymbolNode>>,
-    show_locals: bool,
+    view: SymbolPickerView,
     query: String,
     selected: Option<usize>,
 ) {
-    let items = document_symbol_items(&nodes, show_locals);
+    let items = document_symbol_items(&nodes, &view, query.is_empty());
 
+    // keep the selection on the same symbol, or on its closest visible parent.
+    // With a query the rows are sorted by score, so the index wouldn't match.
     let initial_cursor = selected
         .filter(|_| query.is_empty())
         .and_then(|mut node| loop {
@@ -406,7 +489,9 @@ fn open_document_symbol_picker(
             |item: &DocumentSymbolItem, data: &SymbolPickerData| {
                 let name = item.item.symbol.kind.as_str();
                 let icons = ICONS.load();
+
                 let mut line = Vec::new();
+
                 if let Some(icon) = icons.kind().get(name) {
                     line.push(Span::styled(
                         icon.to_string(),
@@ -417,37 +502,76 @@ fn open_document_symbol_picker(
                 }
 
                 line.push(Span::raw(name));
+
                 Cell::from(Spans::from(line))
             },
         ),
+        // untitled column for the fold marker: `▾` open parent, `▸` folded parent
+        ui::PickerColumn::new("", |item: &DocumentSymbolItem, data: &SymbolPickerData| {
+            if data.query_active.load(atomic::Ordering::Relaxed) {
+                return "".into();
+            }
+            Span::styled(
+                fold_marker(item).unwrap_or(""),
+                data.theme.get("ui.virtual.indent-guide"),
+            )
+            .into()
+        })
+        .without_filtering(),
         ui::PickerColumn::new(
             "name",
             |item: &DocumentSymbolItem, data: &SymbolPickerData| {
                 let mut line = Vec::new();
-                if !data.query_active.load(atomic::Ordering::Relaxed)
-                    && !item.tree_prefix.is_empty()
-                {
-                    line.push(Span::styled(
-                        item.tree_prefix.as_str(),
-                        data.theme.get("ui.virtual.indent-guide"),
-                    ));
+                let browsing = !data.query_active.load(atomic::Ordering::Relaxed);
+                let muted = data.theme.get("ui.virtual.indent-guide");
+                // the tree only makes sense in document order, so hide it while matching
+                if browsing && !item.tree_prefix.is_empty() {
+                    line.push(Span::styled(item.tree_prefix.as_str(), muted));
                 }
                 let style =
                     ui::symbol_kind_style(&data.theme, item.item.symbol.kind, Style::default());
                 line.push(Span::styled(item.item.symbol.name.as_str(), style));
+                // folded parents show how many children are hidden
+                if browsing && item.folded {
+                    line.push(Span::styled(format!(" ({})", item.children), muted));
+                }
                 Cell::from(Spans::from(line))
             },
         )
+        // match on the name only, not on the tree lines and markers
         .with_filter_text(|item: &DocumentSymbolItem, _| item.item.symbol.name.as_str().into()),
         ui::PickerColumn::new("container", |item: &DocumentSymbolItem, _| {
             item.path.as_str().into()
         }),
     ];
 
-    let picker = Picker::new(columns, 1, items, data, move |cx, item, action| {
-        jump_to_location(cx.editor, &item.item.location, action);
-    })
-    .with_title(if show_locals {
+    // While a query is typed, show all symbols (folds ignored) so the search finds
+    // folded-away ones too; when the query is cleared again, restore the folds.
+    let folds_applied = Arc::new(AtomicBool::new(query.is_empty()));
+    let query_change_fn = {
+        let nodes = nodes.clone();
+        let view = view.clone();
+        move |query: &str| {
+            let apply_folds = query.is_empty();
+            if view.folded.is_empty()
+                || folds_applied.swap(apply_folds, atomic::Ordering::Relaxed) == apply_folds
+            {
+                return None;
+            }
+            Some(document_symbol_items(&nodes, &view, apply_folds))
+        }
+    };
+
+    let picker = Picker::new(
+        columns,
+        2, // name column
+        items,
+        data,
+        move |cx, item, action| {
+            jump_to_location(cx.editor, &item.item.location, action);
+        },
+    )
+    .with_title(if view.show_locals {
         "Symbols (with locals)"
     } else {
         "Symbols"
@@ -455,23 +579,49 @@ fn open_document_symbol_picker(
     .with_query(query, editor)
     .with_query_flag(query_active)
     .with_initial_cursor(initial_cursor)
-    .with_key_action(crate::ctrl!('l'), move |cx, item, _cursor, query| {
+    .with_query_change_fn(query_change_fn)
+    .with_key_action(crate::ctrl!('l'), {
+        // Ctrl-l: show or hide locals, keeping query, folds and selection
         let nodes = nodes.clone();
-        let query = query.to_string();
-        let selected = item.map(|item| item.node);
-        cx.jobs.callback(async move {
-            let call = move |editor: &mut Editor, compositor: &mut Compositor| {
-                open_document_symbol_picker(
-                    editor,
-                    compositor,
-                    nodes,
-                    !show_locals,
-                    query,
-                    selected,
-                );
-            };
-            Ok(Callback::EditorCompositor(Box::new(call)))
-        });
+        let view = view.clone();
+        move |cx, item, _cursor, query| {
+            let mut view = view.clone();
+            view.show_locals = !view.show_locals;
+            let selected = item.map(|item| item.node);
+            reopen_document_symbol_picker(cx, nodes.clone(), view, query, selected);
+        }
+    })
+    .with_key_action(crate::ctrl!('f'), {
+        // Ctrl-f: fold or unfold the selected symbol, only if it is a parent
+        let nodes = nodes.clone();
+        let view = view.clone();
+        move |cx, item, _cursor, query| {
+            let mut view = view.clone();
+            if let Some(item) = item.filter(|item| item.children > 0 && query.is_empty()) {
+                if !view.folded.remove(&item.node) {
+                    view.folded.insert(item.node);
+                }
+            }
+            let selected = item.map(|item| item.node);
+            reopen_document_symbol_picker(cx, nodes.clone(), view, query, selected);
+        }
+    })
+    .with_key_action(crate::alt!('f'), {
+        // Alt-f: fold all parents, or unfold everything if anything is folded
+        let nodes = nodes.clone();
+        let view = view.clone();
+        move |cx, item, _cursor, query| {
+            let mut view = view.clone();
+            if !query.is_empty() {
+                // folds are suspended while searching
+            } else if view.folded.is_empty() {
+                view.folded = (0..nodes.len()).filter_map(|i| nodes[i].parent).collect();
+            } else {
+                view.folded.clear();
+            }
+            let selected = item.map(|item| item.node);
+            reopen_document_symbol_picker(cx, nodes.clone(), view, query, selected);
+        }
     })
     .with_preview(move |_editor, item| location_to_file_location(&item.item.location))
     .truncate_start(false);
@@ -617,7 +767,7 @@ pub fn symbol_picker(cx: &mut Context) {
                 editor,
                 compositor,
                 Arc::new(nodes),
-                false,
+                SymbolPickerView::default(),
                 String::new(),
                 None,
             );
