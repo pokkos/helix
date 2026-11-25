@@ -269,6 +269,10 @@ pub struct Picker<T: 'static + Send + Sync, D: 'static> {
 
     /// Whether to show the preview panel (default true)
     show_preview: bool,
+    /// Preview position: Some(true) below the list, Some(false) beside it, None decided by the terminal's shape
+    preview_stacked: Option<bool>,
+    /// The area of the last render, used to find the current orientation
+    last_area: Rect,
     /// Constraints for tabular formatting
     widths: Vec<Constraint>,
 
@@ -414,6 +418,8 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
             query,
             truncate_start: true,
             show_preview: true,
+            preview_stacked: None,
+            last_area: Rect::default(),
             callback_fn: Box::new(callback_fn),
             default_action: Action::Replace,
             completion_height: 0,
@@ -602,6 +608,32 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 
     pub fn toggle_preview(&mut self) {
         self.show_preview = !self.show_preview;
+    }
+
+    pub fn toggle_preview_orientation(&mut self) {
+        if let Some(stacked) = self.preview_orientation(self.last_area) {
+            self.preview_stacked = Some(!stacked);
+        }
+    }
+
+    fn preview_orientation(&self, area: Rect) -> Option<bool> {
+        if !self.show_preview || self.file_fn.is_none() {
+            return None;
+        }
+
+        let fits_beside = area.width > MIN_AREA_WIDTH_FOR_PREVIEW;
+        let fits_stacked = area.height >= MIN_AREA_HEIGHT_FOR_STACKED_PREVIEW;
+        let portrait = area.width < CELL_ASPECT * area.height;
+
+        // follow the user's choice when it fits, otherwise use whatever fits
+        let want_stacked = self.preview_stacked.unwrap_or(portrait);
+        if want_stacked && fits_stacked || !fits_beside && fits_stacked {
+            Some(true)
+        } else if fits_beside {
+            Some(false)
+        } else {
+            None
+        }
     }
 
     fn prompt_handle_event(&mut self, event: &Event, cx: &mut Context) -> EventResult {
@@ -1296,34 +1328,31 @@ impl<T: 'static + Send + Sync, D: 'static + Send + Sync> Picker<T, D> {
 impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Picker<I, D> {
     fn layout(&self, area: Rect) -> (Rect, Option<Rect>) {
         // +---------+ +---------+    +---------+
-        // |prompt   | |preview  |    |preview  |
-        // +---------+ |         |    |         |
-        // |picker   | |         |    |         |
+        // |prompt   | |preview  |    |prompt   |
+        // +---------+ |         |    +---------+
+        // |picker   | |         |    |picker   |
         // |         | |         |    +---------+
-        // +---------+ +---------+    |prompt   |
+        // +---------+ +---------+    |         |
+        //                            |preview  |
+        //                            |         |
         //                            +---------+
-        //                            |picker   |
-        //                            +---------+
-        if !self.show_preview || self.file_fn.is_none() {
-            return (area, None);
-        }
-        let fits_beside = area.width > MIN_AREA_WIDTH_FOR_PREVIEW;
-        let fits_stacked = area.height >= MIN_AREA_HEIGHT_FOR_STACKED_PREVIEW;
-        let portrait = area.width < CELL_ASPECT * area.height;
-        if fits_stacked && (portrait || !fits_beside) {
-            let preview = area.with_height(area.height - area.height / 3);
-            (area.clip_top(preview.height), Some(preview))
-        } else if fits_beside {
-            let picker = area.with_width(area.width / 2);
-            (picker, Some(area.clip_left(picker.width)))
-        } else {
-            (area, None)
+        match self.preview_orientation(area) {
+            Some(true) => {
+                let picker = area.with_height(area.height / 3);
+                (picker, Some(area.clip_top(picker.height)))
+            }
+            Some(false) => {
+                let picker = area.with_width(area.width / 2);
+                (picker, Some(area.clip_left(picker.width)))
+            }
+            None => (area, None),
         }
     }
 }
 
 impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I, D> {
     fn render(&mut self, area: Rect, surface: &mut Surface, cx: &mut Context) {
+        self.last_area = area;
         let (picker_area, preview_area) = self.layout(area);
         self.render_picker(picker_area, surface, cx);
         if let Some(preview_area) = preview_area {
@@ -1450,7 +1479,7 @@ impl<I: 'static + Send + Sync, D: 'static + Send + Sync> Component for Picker<I,
                 return close_fn(self);
             }
             ctrl!('t') => {
-                self.toggle_preview();
+                self.toggle_preview_orientation();
             }
             _ => {
                 self.prompt_handle_event(event, ctx);

@@ -482,7 +482,7 @@ See the documentation page on [pickers](./pickers.md) for more info.
 | `Alt-Enter`                  | Open selected in the background without closing the picker |
 | `Ctrl-s`                     | Open horizontally                                          |
 | `Ctrl-v`                     | Open vertically                                            |
-| `Ctrl-t`                     | Toggle preview                                             |
+| `Ctrl-t`                     | Transpose the picker and the preview                       |
 | `Ctrl-x`                     | Close selected item                                        |
 | `Escape`, `Ctrl-c`           | Close picker                                               |
 
